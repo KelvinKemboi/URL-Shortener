@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Depends
 from sqlmodel import Field, SQLModel, create_engine, Session, select
+from fastapi.responses import RedirectResponse
 import secrets
 import string
 
@@ -39,6 +40,7 @@ def generate_short_code(session: Session, length: int = 7) -> str:
         if not existing_link:
             return short_code
 
+
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/shorten")
@@ -69,6 +71,14 @@ def shorten_url( original_url: str, custom_alias: str | None = None, session: Se
     session.refresh(new_link) 
 
     return {"short_code": new_link.short_code}
+
+@app.get("/{short_code}")
+def redirect_to_original_url(short_code: str, session: Session = Depends(get_session)):
+    # check if the short code exists in the database
+    link = session.exec(select(Link).where(Link.short_code == short_code)).first()
+    if link is None:
+        raise HTTPException(status_code=404, detail="Short code not found")
+    return RedirectResponse(url=link.original_url, status_code=307) # use 307 to preserve the original request method and body
 
 # get, post, put, delete, patch, options, head, trace
 # use async def for async functions where you can use await for async calls
