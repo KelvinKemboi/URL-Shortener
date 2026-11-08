@@ -1,2 +1,3 @@
-create_issue.sh
+create_issues.sh
 __pycache__/
+venv/

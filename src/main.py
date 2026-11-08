@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI
-from sqlmodel import Field, SQLModel, create_engine, Session
-
+from fastapi import FastAPI, HTTPException, Depends
+from sqlmodel import Field, SQLModel, create_engine, Session, select
+import secrets
+import string
 
 class Link(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -27,7 +28,47 @@ async def lifespan(app: FastAPI):
     create_db_and_tables()
     yield
 
+def generate_short_code(session: Session, length: int = 7) -> str:
+    characters = string.ascii_letters + string.digits
+    while True:
+        #generate a random short code of the specified length
+        short_code = ''.join(secrets.choice(characters) for _ in range(length))
+
+        #check if the generated short code already exists in the database
+        existing_link = session.exec(select(Link).where(Link.short_code == short_code)).first()
+        if not existing_link:
+            return short_code
+
 app = FastAPI(lifespan=lifespan)
+
+@app.post("/shorten")
+def shorten_url( original_url: str, custom_alias: str | None = None, session: Session = Depends(get_session)):
+    # check if the original URL already exists in the database
+    existing_link = session.exec(select(Link).where(Link.original_url == original_url)).first()
+    if existing_link:
+        return {"short_code": existing_link.short_code}
+
+    # generate a unique short code for the new URL
+    if custom_alias:
+        # check if valid
+        if custom_alias.replace('_', '').isalnum() and len(custom_alias) <= 20:
+            # check if the custom alias already exists in the database
+            existing_link = session.exec(select(Link).where(Link.short_code == custom_alias)).first()
+            if existing_link:
+                raise HTTPException(status_code=400, detail="Custom alias already exists")
+            short_code = custom_alias
+        else:
+            raise HTTPException(status_code=422, detail="Invalid custom alias")
+    else:
+        short_code = generate_short_code(session)
+    
+    # create a new Link object and add it to the database
+    new_link = Link(short_code=short_code, original_url=original_url)
+    session.add(new_link)
+    session.commit()
+    session.refresh(new_link) 
+
+    return {"short_code": new_link.short_code}
 
 # get, post, put, delete, patch, options, head, trace
 # use async def for async functions where you can use await for async calls
