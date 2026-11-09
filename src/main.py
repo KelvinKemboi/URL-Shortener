@@ -1,10 +1,16 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlmodel import Field, SQLModel, create_engine, Session, select
 from fastapi.responses import RedirectResponse
 import secrets
 import string
+from pydantic import BaseModel, HttpUrl
+
+# define the Pydantic model for the request body
+class LinkCreate(BaseModel):
+    original_url: HttpUrl
+    custom_alias: str | None = None
 
 class Link(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -44,11 +50,13 @@ def generate_short_code(session: Session, length: int = 7) -> str:
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/shorten")
-def shorten_url( original_url: str, custom_alias: str | None = None, session: Session = Depends(get_session)):
+def shorten_url(data: LinkCreate, request: Request, session: Session = Depends(get_session)):
     # check if the original URL already exists in the database
+    original_url = str(data.original_url)
+    custom_alias = data.custom_alias
     existing_link = session.exec(select(Link).where(Link.original_url == original_url)).first()
     if existing_link:
-        return {"short_code": existing_link.short_code}
+        return {"short_code": existing_link.short_code, "short_url": f"{request.base_url}{existing_link.short_code}"}
 
     # generate a unique short code for the new URL
     if custom_alias:
@@ -70,7 +78,7 @@ def shorten_url( original_url: str, custom_alias: str | None = None, session: Se
     session.commit()
     session.refresh(new_link) 
 
-    return {"short_code": new_link.short_code}
+    return {"short_code": new_link.short_code, "short_url": f"{request.base_url}{new_link.short_code}"}
 
 @app.get("/{short_code}")
 def redirect_to_original_url(short_code: str, session: Session = Depends(get_session)):
