@@ -7,6 +7,12 @@ from sqlalchemy import func
 import secrets
 import string
 from pydantic import AwareDatetime, BaseModel, HttpUrl
+from redis import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+import json
+
+redis_client = Redis(host='localhost', port=6379, db=0, decode_responses=True) # decode_responses=True ensures that Redis returns strings instead of bytes
+
 
 # define the Pydantic model for the request body
 class LinkCreate(BaseModel):
@@ -108,22 +114,61 @@ def shorten_url(data: LinkCreate, request: Request, session: Session = Depends(g
 # endpoint to redirect to the original URL when a short code is accessed
 @app.get("/{short_code}")
 def redirect_to_original_url(short_code: str, session: Session = Depends(get_session)):
-    # check if the short code exists in the database
+    # check redis cache first - if Redis is down, treat it as a cache miss and use the database
+    try:
+        cached_url = redis_client.get(short_code)
+    except RedisConnectionError:
+        cached_url = None
+
+    # cache hit - when the short code is found in Redis, we can skip the database query and just redirect to the cached URL
+    if cached_url:
+        # load the cached value from Redis and check if the link has expired
+        cached_value = json.loads(cached_url) # to dictionary
+        original_url = cached_value.get("original_url")
+        expiration_date = cached_value.get("expiration_date")
+        link_id = cached_value.get("id")
+
+        if expiration_date is not None:
+            expiration_date = datetime.fromisoformat(expiration_date)
+            if expiration_date <= datetime.now(timezone.utc):
+                try:
+                    redis_client.delete(short_code)  # remove the expired link from Redis cache
+                except RedisConnectionError:
+                    pass
+                raise HTTPException(status_code=410, detail="Link has expired")
+
+        session.add(clicks(link_id=link_id))  # increment click count in the database
+        session.commit()
+        return RedirectResponse(original_url, status_code=307)
+
+    # cache miss - check if the short code exists in the database
     link = session.exec(select(Link).where(Link.short_code == short_code)).first()
     if link is None:
         raise HTTPException(status_code=404, detail="Short code not found")
 
-    if link.id is None:
-        raise HTTPException(status_code=404, detail="Link ID not found")
-
+    # check if the link has expired
     if is_expired(link):
-        raise HTTPException(status_code=410, detail="Short code has expired")
-    
-    # record the click in the clicks table
-    click = clicks(link_id=link.id)
-    session.add(click)
+        raise HTTPException(status_code=410, detail="Link has expired")
+
+    # increment click count in the database
+    new_click = clicks(link_id=link.id)
+    session.add(new_click)
     session.commit()
-    return RedirectResponse(url=link.original_url, status_code=307) # use 307 to preserve the original request method and body
+
+    # dict to store the link data in Redis cache
+    cache_value = {
+        "id": link.id,
+        "original_url": link.original_url,
+        "expiration_date": link.expiration_date.isoformat() if link.expiration_date else None
+    }
+    # cache the link in Redis for future requests - if Redis is down, skip caching; the redirect still works
+    try:
+        redis_client.set(short_code, json.dumps(cache_value), ex=3600)  # cache for 1 hour
+    except RedisConnectionError:
+        pass
+
+    # redirect to the original URL
+    return RedirectResponse(link.original_url, status_code=307)
 
 # endpoint to get the click statistics for a given short code
 @app.get("/stats/{short_code}")
