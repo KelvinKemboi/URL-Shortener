@@ -1,6 +1,6 @@
 # URL Shortener
 
-A small URL shortener API built with FastAPI, SQLite and Redis. I built it to learn backend basics: routing, databases, generating unique codes, HTTP redirects, click analytics, expiring links and caching.
+A small URL shortener API built with FastAPI, SQLite and Redis. I built it to re-learn backend basics: routing, databases, generating unique codes, HTTP redirects, click analytics, expiring links and caching.
 
 ## Running it
 
