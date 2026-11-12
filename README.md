@@ -32,7 +32,7 @@ Example request body for `POST /shorten` (only `original_url` is required):
 }
 ```
 
-## What I learned
+## Phases
 
 ### 1. Database
 - I used SQLite with SQLModel, which is built on SQLAlchemy. I chose SQLite because it's a single file, Python supports it out of the box, and I wanted to start simple.
